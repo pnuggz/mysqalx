@@ -10,8 +10,8 @@ import (
 	"github.com/pnuggz/mysqalx/schemas"
 )
 
-func createNode(t *testing.T) mysqalx.MyTx {
-	dataSource := "mysqalx:mysqalx@tcp(localhost:3307)/mysqalx"
+func createNode(t *testing.T) (*sqlx.DB, mysqalx.MyTx) {
+	dataSource := "mysqalx:mysqalx@tcp(localhost:3306)/mysqalx"
 
 	db, err := sqlx.Connect("mysql", dataSource)
 	if err != nil {
@@ -24,7 +24,11 @@ func createNode(t *testing.T) mysqalx.MyTx {
 		db.MustExec(schema)
 	}
 
-	return node
+	db.Query("truncate t1")
+	db.Query("truncate t2")
+	db.Query("truncate t3")
+
+	return db, node
 }
 
 func TestMysqalxConnectMySQL(t *testing.T) {
@@ -39,19 +43,25 @@ type T2 struct {
 	ID string `json:"id" db:"id"`
 }
 
+type T3 struct {
+	ID string `json:"id" db:"id"`
+}
+
 func TestSingleCommit(t *testing.T) {
-	node := createNode(t)
+	db, node := createNode(t)
 
 	ctx := context.Background()
 
-	txTest, _ := node.BeginTxx(ctx, nil)
+	txService, _ := node.BeginTxx(ctx, nil)
 
 	tx1, _ := node.BeginTxx(ctx, nil)
 	tx1.ExecContext(ctx, "INSERT INTO t1(id) VALUES('abc')")
 	tx1.Commit()
 
+	txService.Commit()
+
 	query := "select * from t1"
-	rows, err := tx1.QueryContext(ctx, query)
+	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		t.Errorf(err.Error())
 	}
@@ -71,23 +81,23 @@ func TestSingleCommit(t *testing.T) {
 	if len(res) == 0 {
 		t.Errorf("commit didn't work")
 	}
-
-	txTest.Rollback()
 }
 
 func TestSingleRollback(t *testing.T) {
-	node := createNode(t)
+	db, node := createNode(t)
 
 	ctx := context.Background()
 
-	txTest, _ := node.BeginTxx(ctx, nil)
+	txService, _ := node.BeginTxx(ctx, nil)
 
 	tx1, _ := node.BeginTxx(ctx, nil)
 	tx1.ExecContext(ctx, "INSERT INTO t1(id) VALUES('abc')")
 	tx1.Rollback()
 
+	txService.Commit()
+
 	query := "select * from t1"
-	rows, err := tx1.QueryContext(ctx, query)
+	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		t.Errorf(err.Error())
 	}
@@ -107,16 +117,14 @@ func TestSingleRollback(t *testing.T) {
 	if len(res) != 0 {
 		t.Errorf("rollback didn't work")
 	}
-
-	txTest.Rollback()
 }
 
 func TestSingleCommitAndSingleRollback(t *testing.T) {
-	node := createNode(t)
+	db, node := createNode(t)
 
 	ctx := context.Background()
 
-	txTest, _ := node.BeginTxx(ctx, nil)
+	txService, _ := node.BeginTxx(ctx, nil)
 
 	tx1, _ := node.BeginTxx(ctx, nil)
 	tx1.ExecContext(ctx, "INSERT INTO t1(id) VALUES('abc')")
@@ -126,8 +134,10 @@ func TestSingleCommitAndSingleRollback(t *testing.T) {
 	tx2.ExecContext(ctx, "INSERT INTO t2(id) VALUES('abc')")
 	tx2.Rollback()
 
+	txService.Commit()
+
 	query := "select * from t1"
-	rows, err := tx1.QueryContext(ctx, query)
+	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		t.Errorf(err.Error())
 	}
@@ -149,7 +159,158 @@ func TestSingleCommitAndSingleRollback(t *testing.T) {
 	}
 
 	query = "select * from t2"
-	rows, err = tx2.QueryContext(ctx, query)
+	rows, err = db.QueryContext(ctx, query)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+
+	res2 := []T2{}
+	for rows.Next() {
+		var cm T2
+		err := rows.Scan(&cm.ID)
+		if err != nil {
+			t.Errorf(err.Error())
+		}
+
+		res2 = append(res2, cm)
+	}
+
+	if len(res2) != 0 {
+		t.Errorf("rollback didn't work")
+	}
+}
+
+func TestDoubleCommitAndSingleRollback(t *testing.T) {
+	db, node := createNode(t)
+
+	ctx := context.Background()
+
+	txService, _ := node.BeginTxx(ctx, nil)
+
+	tx1, _ := node.BeginTxx(ctx, nil)
+	tx1.ExecContext(ctx, "INSERT INTO t1(id) VALUES('abc')")
+	tx1.Commit()
+
+	tx2, _ := node.BeginTxx(ctx, nil)
+	tx2.ExecContext(ctx, "INSERT INTO t2(id) VALUES('abc')")
+	tx2.Commit()
+
+	tx3, _ := node.BeginTxx(ctx, nil)
+	tx3.ExecContext(ctx, "INSERT INTO t3(id) VALUES('abc')")
+	tx3.Rollback()
+
+	txService.Commit()
+
+	query := "select * from t1"
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+
+	res := []T1{}
+
+	for rows.Next() {
+		var c T1
+		err := rows.Scan(&c.ID)
+		if err != nil {
+			t.Errorf(err.Error())
+		}
+
+		res = append(res, c)
+	}
+
+	if len(res) == 0 {
+		t.Errorf("commit didn't work")
+	}
+
+	query = "select * from t2"
+	rows, err = db.QueryContext(ctx, query)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+
+	res2 := []T2{}
+	for rows.Next() {
+		var cm T2
+		err := rows.Scan(&cm.ID)
+		if err != nil {
+			t.Errorf(err.Error())
+		}
+
+		res2 = append(res2, cm)
+	}
+
+	if len(res2) == 0 {
+		t.Errorf("commit didn't work")
+	}
+
+	query = "select * from t3"
+	rows, err = db.QueryContext(ctx, query)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+
+	res3 := []T3{}
+	for rows.Next() {
+		var cm T3
+		err := rows.Scan(&cm.ID)
+		if err != nil {
+			t.Errorf(err.Error())
+		}
+
+		res3 = append(res3, cm)
+	}
+
+	if len(res3) != 0 {
+		t.Errorf("rollback didn't work")
+	}
+}
+
+func TestDoubleCommitAndSingleRollbackAndAllRollback(t *testing.T) {
+	db, node := createNode(t)
+
+	ctx := context.Background()
+
+	txService, _ := node.BeginTxx(ctx, nil)
+
+	tx1, _ := node.BeginTxx(ctx, nil)
+	tx1.ExecContext(ctx, "INSERT INTO t1(id) VALUES('abc')")
+	tx1.Commit()
+
+	tx2, _ := node.BeginTxx(ctx, nil)
+	tx2.ExecContext(ctx, "INSERT INTO t2(id) VALUES('abc')")
+	tx2.Commit()
+
+	tx3, _ := node.BeginTxx(ctx, nil)
+	tx3.ExecContext(ctx, "INSERT INTO t3(id) VALUES('abc')")
+	tx3.Rollback()
+
+	txService.Rollback()
+
+	query := "select * from t1"
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+
+	res := []T1{}
+
+	for rows.Next() {
+		var c T1
+		err := rows.Scan(&c.ID)
+		if err != nil {
+			t.Errorf(err.Error())
+		}
+
+		res = append(res, c)
+	}
+
+	if len(res) != 0 {
+		t.Errorf("rollback didn't work")
+	}
+
+	query = "select * from t2"
+	rows, err = db.QueryContext(ctx, query)
 	if err != nil {
 		t.Errorf(err.Error())
 	}
@@ -169,5 +330,24 @@ func TestSingleCommitAndSingleRollback(t *testing.T) {
 		t.Errorf("rollback didn't work")
 	}
 
-	txTest.Rollback()
+	query = "select * from t3"
+	rows, err = db.QueryContext(ctx, query)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+
+	res3 := []T3{}
+	for rows.Next() {
+		var cm T3
+		err := rows.Scan(&cm.ID)
+		if err != nil {
+			t.Errorf(err.Error())
+		}
+
+		res3 = append(res3, cm)
+	}
+
+	if len(res3) != 0 {
+		t.Errorf("rollback didn't work")
+	}
 }

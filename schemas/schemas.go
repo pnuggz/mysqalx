@@ -8,6 +8,7 @@ var (
 	schemas = map[string]string{
 		"T1": T1,
 		"T2": T2,
+		"T3": T3,
 	}
 	errInvalidSchema = fmt.Errorf("invalid schema requested")
 )

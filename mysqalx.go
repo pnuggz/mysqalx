@@ -191,16 +191,8 @@ func (n *myTx) Commit() error {
 	n.commitCount += 1
 
 	// If this is not the final commit, then
-	// we just create a new savepoint
+	// we just continue
 	if n.transactionCount != n.commitCount {
-		// savepoints name must start with a char and cannot contain dashes (-)
-		savePointID := "sp_" + strings.Replace(uuids.Hex128(), "-", "_", -1)
-		n.savePointIDs = append(n.savePointIDs, savePointID)
-		_, err = n.tx.Exec("SAVEPOINT " + savePointID)
-		if err != nil {
-			return err
-		}
-
 		return nil
 	}
 
